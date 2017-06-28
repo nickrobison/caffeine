@@ -150,20 +150,18 @@ public final class ReferenceTest {
   }
 
   @Test(dataProvider = "caches")
-  @CacheSpec(keys = ReferenceType.STRONG, values = {ReferenceType.WEAK, ReferenceType.SOFT},
-      expireAfterAccess = Expire.DISABLED, expireAfterWrite = Expire.DISABLED,
-      maximumSize = Maximum.DISABLED, weigher = CacheWeigher.DEFAULT,
-      population = Population.FULL, stats = Stats.ENABLED, removalListener = Listener.CONSUMING)
+  @CacheSpec(requiresWeakOrSoft = true, expireAfterAccess = Expire.DISABLED,
+      expireAfterWrite = Expire.DISABLED, maximumSize = Maximum.DISABLED,
+      weigher = CacheWeigher.DEFAULT, population = Population.FULL, stats = Stats.ENABLED,
+      removalListener = Listener.CONSUMING)
   public void put(Cache<Integer, Integer> cache, CacheContext context) {
-    Integer key = context.firstKey();
     context.clear();
     GcFinalization.awaitFullGc();
-    cache.put(key, context.absentValue());
 
-    long count = context.initialSize() - cache.estimatedSize() + 1;
-    if (context.population() != Population.SINGLETON) {
-      assertThat(count, is(greaterThan(1L)));
-    }
+    awaitFullCleanup(cache);
+    assertThat(cache.estimatedSize(), is(0L));
+
+    long count = context.initialSize();
     assertThat(cache, hasRemovalNotifications(context, count, RemovalCause.COLLECTED));
     verifyWriter(context, (verifier, writer) -> verifier.deletions(count, RemovalCause.COLLECTED));
   }
@@ -1015,5 +1013,17 @@ public final class ReferenceTest {
     });
 
     assertThat(cache.policy().eviction().get().weightedSize().getAsLong(), is(3L));
+  }
+
+  /** Ensures that that all the pending work is performed (Guava limits work per cycle). */
+  private static void awaitFullCleanup(Cache<Integer, Integer> cache) {
+    for (;;) {
+      long size = cache.estimatedSize();
+      cache.cleanUp();
+
+      if (size == cache.estimatedSize()) {
+        break;
+      }
+    }
   }
 }
